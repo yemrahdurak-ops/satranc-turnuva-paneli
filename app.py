@@ -6,9 +6,9 @@ import urllib.parse
 # 1. Sayfa Ayarları
 st.set_page_config(page_title="İSD Turnuva Paneli", layout="wide", page_icon="♟️")
 
-# 2. Veritabanı (İsim çakışmaması için v30 yapıyoruz)
+# 2. Veritabanı (Versiyonu v35 yapıyoruz)
 def init_db():
-    conn = sqlite3.connect('isd_final_v30.db', check_same_thread=False)
+    conn = sqlite3.connect('isd_final_v35.db', check_same_thread=False)
     conn.execute('''CREATE TABLE IF NOT EXISTS turnuva_ayar 
                     (id INTEGER PRIMARY KEY, ad TEXT, toplam_tur INTEGER, mevcut_tur INTEGER, durum TEXT)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS sonuclar 
@@ -43,27 +43,20 @@ if menu == "🏆 Mevcut Turnuva":
 
         tab1, tab2, tab3 = st.tabs(["👥 Kayıt & Yönetim", "⚔️ Eşlendirme", "📊 Güncel Sıralama"])
 
+        # --- TAB 1: KAYIT ---
         with tab1:
             col_sol, col_sag = st.columns([1, 2])
-            
             with col_sol:
                 st.write("### ➕ Oyuncu Ekle")
-                # Hata veren manuel sıfırlama yerine clear_on_submit kullanıyoruz
                 with st.form("oyuncu_kayit_formu", clear_on_submit=True):
                     y_isim = st.text_input("Ad Soyad")
                     y_elo = st.number_input("ELO", value=1000)
-                    kaydet_butonu = st.form_submit_button("Listeye Ekle")
-                    
-                    if kaydet_butonu:
+                    if st.form_submit_button("Listeye Ekle"):
                         if y_isim:
                             conn.execute("INSERT INTO sonuclar (isim, elo, puan, turnuva_id) VALUES (?, ?, 0.0, ?)", (y_isim, y_elo, t_id))
                             conn.commit()
                             st.toast(f"✅ {y_isim} eklendi!")
-                            # Form dışındaki listeyi güncellemek için rerun yapıyoruz
                             st.rerun()
-                        else:
-                            st.error("İsim boş bırakılamaz!")
-
             with col_sag:
                 st.write("### 📋 Oyuncu Listesi")
                 df_oy = pd.read_sql(f"SELECT id, isim, elo FROM sonuclar WHERE turnuva_id={t_id}", conn)
@@ -71,20 +64,17 @@ if menu == "🏆 Mevcut Turnuva":
                     for i, r in enumerate(df_oy.itertuples(), 1):
                         c1, c2, c3, c4 = st.columns([0.5, 3, 2, 2])
                         c1.write(f"**{i}**")
-                        # Düzenleme kısımları form dışında kalmalı ki anlık güncellensin
                         new_n = c2.text_input("İsim", value=r.isim, key=f"n_{r.id}", label_visibility="collapsed")
                         new_e = c3.number_input("ELO", value=r.elo, key=f"e_{r.id}", label_visibility="collapsed")
                         cb1, cb2 = c4.columns(2)
                         if cb1.button("💾", key=f"s_{r.id}"):
                             conn.execute("UPDATE sonuclar SET isim=?, elo=? WHERE id=?", (new_n, new_e, r.id))
-                            conn.commit()
-                            st.rerun()
+                            conn.commit(); st.rerun()
                         if cb2.button("🗑️", key=f"d_{r.id}"):
                             conn.execute("DELETE FROM sonuclar WHERE id=?", (r.id,))
-                            conn.commit()
-                            st.rerun()
+                            conn.commit(); st.rerun()
 
-        # --- EŞLENDİRME TABI ---
+        # --- TAB 2: EŞLENDİRME (MASA NUMARALI) ---
         with tab2:
             st.write(f"### Tur {t_mevcut} Maçları")
             mevcut_m = conn.execute("SELECT beyaz, siyah, sonuc FROM eslesmeler WHERE turnuva_id=? AND tur_no=?", (t_id, t_mevcut)).fetchall()
@@ -101,17 +91,18 @@ if menu == "🏆 Mevcut Turnuva":
                         ust, alt = liste[:yari], liste[yari:]
                         for i in range(yari):
                             conn.execute("INSERT INTO eslesmeler (turnuva_id, tur_no, beyaz, siyah, sonuc) VALUES (?, ?, ?, ?, ?)", (t_id, t_mevcut, ust[i], alt[i], "Bekliyor"))
-                        conn.commit()
-                        st.rerun()
+                        conn.commit(); st.rerun()
             else:
                 with st.form("sonuc_g"):
                     maçlar = []
-                    for b, s, res in mevcut_m:
-                        if s == "BAY": st.info(f"✅ {b} BAY geçti.")
+                    # Masa numaralarını burada i+1 olarak kullanıyoruz
+                    for i, (b, s, res) in enumerate(mevcut_m, 1):
+                        if s == "BAY": 
+                            st.info(f"✅ **BAY:** {b} (1 Puan)")
                         else:
                             ca, cb = st.columns([3, 2])
-                            ca.write(f"**{b}** vs **{s}**")
-                            skor = cb.selectbox("Sonuç", ["Bekliyor", "1-0", "0-1", "0.5-0.5"], key=f"m_{b}_{s}")
+                            ca.write(f"🪑 **Masa {i}:** {b} - {s}")
+                            skor = cb.selectbox("Sonuç", ["Bekliyor", "1-0", "0-1", "0.5-0.5"], key=f"m_{t_mevcut}_{i}")
                             maçlar.append((b, s, skor))
                     
                     if st.form_submit_button("Turu Onayla"):
@@ -126,16 +117,18 @@ if menu == "🏆 Mevcut Turnuva":
                             conn.execute("UPDATE turnuva_ayar SET mevcut_tur = ? WHERE id = ?", (t_mevcut + 1, t_id))
                         else:
                             conn.execute("UPDATE turnuva_ayar SET durum = 'Tamamlandı' WHERE id = ?", (t_id,))
-                        conn.commit()
-                        st.rerun()
+                        conn.commit(); st.rerun()
 
-                # WhatsApp Paylaş
+                # WhatsApp Paylaş (Masa Numaralı)
                 es_msj = f"⚔️ *{t_ad} - Tur {t_mevcut} Eşleşmeleri*\n\n"
                 for i, (b, s, r) in enumerate(mevcut_m, 1):
-                    es_msj += f"🔹 Masa {i}: {b} - {s}\n" if s != "BAY" else f"🔸 BAY: {b}\n"
-                st.link_button("📲 WhatsApp'ta Paylaş", f"https://wa.me/?text={urllib.parse.quote(es_msj)}")
+                    if s == "BAY":
+                        es_msj += f"🔸 *BAY:* {b}\n"
+                    else:
+                        es_msj += f"🪑 *Masa {i}:* {b} - {s}\n"
+                st.link_button("📲 Eşleşmeleri WhatsApp'ta Paylaş", f"https://wa.me/?text={urllib.parse.quote(es_msj)}")
 
-        # --- SIRALAMA TABI ---
+        # --- TAB 3: SIRALAMA ---
         with tab3:
             df_rank = pd.read_sql(f"SELECT isim as Oyuncu, elo as ELO, puan as Puan FROM sonuclar WHERE turnuva_id={t_id} ORDER BY Puan DESC, ELO DESC", conn)
             df_rank.index = range(1, len(df_rank) + 1)
@@ -152,8 +145,9 @@ elif menu == "📜 Turnuva Arşivi":
     st.header("📚 Arşiv")
     arsiv_df = pd.read_sql("SELECT id, ad FROM turnuva_ayar WHERE durum='Tamamlandı'", conn)
     if not arsiv_df.empty:
-        secilen = st.selectbox("Seç", arsiv_df['ad'].tolist())
+        secilen = st.selectbox("Turnuva Seç", arsiv_df['ad'].tolist())
         s_id = arsiv_df[arsiv_df['ad'] == secilen]['id'].values[0]
-        f_df = pd.read_sql(f"SELECT isim as Oyuncu, puan as Puan FROM sonuclar WHERE turnuva_id={s_id} ORDER BY Puan DESC", conn)
+        f_df = pd.read_sql(f"SELECT isim as Oyuncu, elo as ELO, puan as Puan FROM sonuclar WHERE turnuva_id={s_id} ORDER BY Puan DESC", conn)
         f_df.index = range(1, len(f_df) + 1)
+        f_df['Puan'] = f_df['Puan'].map('{:,.1f}'.format)
         st.table(f_df)
