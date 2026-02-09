@@ -6,9 +6,9 @@ import urllib.parse
 # 1. Sayfa Ayarları
 st.set_page_config(page_title="ISD FIDE Swiss Pro", layout="wide", page_icon="♟️")
 
-# 2. Veritabanı (v150 - Syntax ve FIDE Mantığı Onarıldı)
+# 2. Veritabanı (v160 - FIDE Kuralları ve Yazım Onarımı)
 def init_db():
-    conn = sqlite3.connect('isd_fide_v150.db', check_same_thread=False)
+    conn = sqlite3.connect('isd_fide_v160.db', check_same_thread=False)
     conn.execute('CREATE TABLE IF NOT EXISTS turnuva_ayar (id INTEGER PRIMARY KEY, ad TEXT, toplam_tur INTEGER, mevcut_tur INTEGER, durum TEXT)')
     conn.execute('''CREATE TABLE IF NOT EXISTS sonuclar 
                     (id INTEGER PRIMARY KEY, isim TEXT, elo INTEGER, puan REAL DEFAULT 0.0, 
@@ -22,7 +22,7 @@ conn = init_db()
 
 # --- PAIRING NUMBER GÜNCELLEME (Madde 7) ---
 def guncelle_pairing_no(t_id):
-    # Madde 7: ELO ve İsim sırasına göre numara atar
+    # Madde 7: ELO ve İsim sırasına göre Pairing Number atar
     players = pd.read_sql(f"SELECT id FROM sonuclar WHERE turnuva_id={t_id} ORDER BY elo DESC, isim ASC", conn)
     for i, row in enumerate(players.itertuples(), 1):
         conn.execute(f"UPDATE sonuclar SET pairing_no = {i} WHERE id = {row.id}")
@@ -49,6 +49,7 @@ if menu == "🏆 Mevcut Turnuva":
 
         if t_durum == 'Bitti':
             st.header(f"🏆 {t_ad} Final Sonuçları")
+            # Madde 16: Puan ve ELO'ya göre sıralama
             df_final = pd.read_sql(f"SELECT pairing_no as 'No', isim as 'Oyuncu', elo as 'ELO', puan as 'Puan' FROM sonuclar WHERE turnuva_id={t_id} ORDER BY Puan DESC, ELO DESC", conn)
             st.table(df_final)
             if st.button("Arşive Kaldır"):
@@ -85,7 +86,7 @@ if menu == "🏆 Mevcut Turnuva":
                         players = pd.read_sql(f"SELECT isim FROM sonuclar WHERE turnuva_id={t_id} ORDER BY puan DESC, pairing_no ASC", conn)['isim'].tolist()
                         
                         if len(players) >= 2:
-                            # Madde 8: Bye Atama (En düşük pairing no'lu oyuncuya)
+                            # Madde 8: Bye Atama (Sayı tekse, en düşük pairing no'ya)
                             if len(players) % 2 != 0:
                                 bye = players.pop()
                                 conn.execute("INSERT INTO eslesmeler (turnuva_id, tur_no, beyaz, siyah, sonuc) VALUES (?, ?, ?, 'BYE', '1-0')", (t_id, t_mevcut, bye))
@@ -113,4 +114,21 @@ if menu == "🏆 Mevcut Turnuva":
                                     p1 = 1.0 if r == "1-0" else (0.5 if r == "0.5-0.5" else 0.0)
                                     conn.execute("UPDATE sonuclar SET puan=puan+? WHERE isim=? AND turnuva_id=?", (p1, b, t_id))
                                     conn.execute("UPDATE sonuclar SET puan=puan+? WHERE isim=? AND turnuva_id=?", (1.0-p1, s, t_id))
-                                    conn.execute(f"UPDATE eslesmeler SET sonuc='{r}' WHERE beyaz='{b}' AND turnuva_id={t_id
+                                    # HATA GİDERİLEN SATIR (Süslü parantez kapatıldı)
+                                    conn.execute(f"UPDATE eslesmeler SET sonuc='{r}' WHERE beyaz='{b}' AND turnuva_id={t_id} AND tur_no={t_mevcut}")
+                            
+                            if t_mevcut < t_toplam:
+                                conn.execute(f"UPDATE turnuva_ayar SET mevcut_tur={t_mevcut+1} WHERE id={t_id}")
+                            else:
+                                conn.execute(f"UPDATE turnuva_ayar SET durum='Bitti' WHERE id={t_id}")
+                            conn.commit(); st.rerun()
+
+            with tab3:
+                st.write("### Güncel Sıralama (Madde 16)")
+                df_s = pd.read_sql(f"SELECT pairing_no as 'No', isim as 'Oyuncu', elo as 'ELO', puan as 'Puan' FROM sonuclar WHERE turnuva_id={t_id} ORDER BY Puan DESC, ELO DESC", conn)
+                st.table(df_s)
+
+elif menu == "📜 Arşiv":
+    st.header("📚 Arşiv")
+    df_a = pd.read_sql("SELECT ad FROM turnuva_ayar WHERE durum IN ('Arşiv', 'Bitti')", conn)
+    st.table(df_a)
