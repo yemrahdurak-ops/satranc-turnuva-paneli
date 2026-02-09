@@ -4,11 +4,11 @@ import sqlite3
 import urllib.parse
 
 # 1. Sayfa Ayarları
-st.set_page_config(page_title="ISD FIDE Swiss Pro", layout="wide", page_icon="♟️")
+st.set_page_config(page_title="İSD FIDE Yönetim Paneli", layout="wide", page_icon="♟️")
 
-# 2. Veritabanı (v160 - FIDE Kuralları ve Yazım Onarımı)
+# 2. Veritabanı (v170 - Arşiv ve Düzenleme Geri Geldi)
 def init_db():
-    conn = sqlite3.connect('isd_fide_v160.db', check_same_thread=False)
+    conn = sqlite3.connect('isd_fide_v170.db', check_same_thread=False)
     conn.execute('CREATE TABLE IF NOT EXISTS turnuva_ayar (id INTEGER PRIMARY KEY, ad TEXT, toplam_tur INTEGER, mevcut_tur INTEGER, durum TEXT)')
     conn.execute('''CREATE TABLE IF NOT EXISTS sonuclar 
                     (id INTEGER PRIMARY KEY, isim TEXT, elo INTEGER, puan REAL DEFAULT 0.0, 
@@ -20,19 +20,19 @@ def init_db():
 
 conn = init_db()
 
-# --- PAIRING NUMBER GÜNCELLEME (Madde 7) ---
+# --- PAIRING NO GÜNCELLEME (Madde 7) ---
 def guncelle_pairing_no(t_id):
-    # Madde 7: ELO ve İsim sırasına göre Pairing Number atar
     players = pd.read_sql(f"SELECT id FROM sonuclar WHERE turnuva_id={t_id} ORDER BY elo DESC, isim ASC", conn)
     for i, row in enumerate(players.itertuples(), 1):
         conn.execute(f"UPDATE sonuclar SET pairing_no = {i} WHERE id = {row.id}")
     conn.commit()
 
 # --- MENÜ ---
-st.sidebar.title("♟️ İSD FIDE Yönetim")
-menu = st.sidebar.radio("Menü Seçin", ["🏆 Mevcut Turnuva", "📜 Arşiv"])
+st.sidebar.title("♟️ İSD Yönetim")
+menu = st.sidebar.radio("Menü Seçin", ["🏆 Mevcut Turnuva", "📜 Arşiv ve Geçmiş"])
 
 if menu == "🏆 Mevcut Turnuva":
+    # Sadece Aktif ve yeni Biten turnuvaları gösterir
     aktif = conn.execute("SELECT * FROM turnuva_ayar WHERE durum IN ('Aktif', 'Bitti') ORDER BY id DESC LIMIT 1").fetchone()
 
     if not aktif:
@@ -46,20 +46,19 @@ if menu == "🏆 Mevcut Turnuva":
                     conn.commit(); st.rerun()
     else:
         t_id, t_ad, t_toplam, t_mevcut, t_durum = aktif
-
+        
         if t_durum == 'Bitti':
-            st.header(f"🏆 {t_ad} Final Sonuçları")
-            # Madde 16: Puan ve ELO'ya göre sıralama
+            st.success(f"🏆 {t_ad} Tamamlandı! Final sıralaması aşağıdadır.")
             df_final = pd.read_sql(f"SELECT pairing_no as 'No', isim as 'Oyuncu', elo as 'ELO', puan as 'Puan' FROM sonuclar WHERE turnuva_id={t_id} ORDER BY Puan DESC, ELO DESC", conn)
             st.table(df_final)
-            if st.button("Arşive Kaldır"):
+            if st.button("Turnuvayı Arşive Kaldır (Yenisi İçin Yer Aç)"):
                 conn.execute(f"UPDATE turnuva_ayar SET durum='Arşiv' WHERE id={t_id}")
                 conn.commit(); st.rerun()
-        
         else:
-            tab1, tab2, tab3 = st.tabs(["👥 Oyuncu Kaydı", "⚔️ Eşlendirme", "📊 Sıralama"])
+            tab1, tab2, tab3 = st.tabs(["👥 Oyuncu Kaydı & Düzenleme", "⚔️ Eşlendirme", "📊 Sıralama"])
 
             with tab1:
+                # DÜZELTME VE SİLME SEÇENEKLERİ GERİ GELDİ
                 c1, c2 = st.columns([1, 2])
                 with c1:
                     with st.form("o_ekle", clear_on_submit=True):
@@ -68,55 +67,55 @@ if menu == "🏆 Mevcut Turnuva":
                         if st.form_submit_button("Ekle"):
                             if ad:
                                 conn.execute("INSERT INTO sonuclar (isim, elo, turnuva_id) VALUES (?, ?, ?)", (ad, elo, t_id))
-                                conn.commit()
-                                guncelle_pairing_no(t_id)
-                                st.rerun()
+                                conn.commit(); guncelle_pairing_no(t_id); st.rerun()
                 with c2:
-                    st.write("### 📋 Katılımcı Listesi (Madde 7)")
-                    df_l = pd.read_sql(f"SELECT pairing_no as 'No', isim as 'Ad Soyad', elo as 'ELO' FROM sonuclar WHERE turnuva_id={t_id} ORDER BY pairing_no ASC", conn)
-                    st.table(df_l)
+                    st.write("### 📋 Oyuncu Listesi")
+                    df_l = pd.read_sql(f"SELECT id, pairing_no, isim, elo FROM sonuclar WHERE turnuva_id={t_id} ORDER BY pairing_no ASC", conn)
+                    for r in df_l.itertuples():
+                        col1, col2, col3, col4 = st.columns([0.5, 3, 1.5, 2])
+                        col1.write(r.pairing_no)
+                        new_n = col2.text_input("İsim", value=r.isim, key=f"n_{r.id}", label_visibility="collapsed")
+                        new_e = col3.number_input("ELO", value=r.elo, key=f"e_{r.id}", label_visibility="collapsed")
+                        cb1, cb2 = col4.columns(2)
+                        if cb1.button("💾", key=f"s_{r.id}"):
+                            conn.execute("UPDATE sonuclar SET isim=?, elo=? WHERE id=?", (new_n, new_e, r.id))
+                            conn.commit(); guncelle_pairing_no(t_id); st.rerun()
+                        if cb2.button("🗑️", key=f"d_{r.id}"):
+                            conn.execute("DELETE FROM sonuclar WHERE id=?", (r.id,))
+                            conn.commit(); guncelle_pairing_no(t_id); st.rerun()
 
             with tab2:
-                st.write(f"### Tur {t_mevcut} Eşleşmeleri")
+                # EŞLENDİRME MANTIĞI (Madde 9.4)
                 mevcut_m = conn.execute("SELECT beyaz, siyah, sonuc FROM eslesmeler WHERE turnuva_id=? AND tur_no=?", (t_id, t_mevcut)).fetchall()
-                
                 if not mevcut_m:
-                    if st.button("🎲 FIDE Eşlendirmeyi Yap"):
-                        # Madde 9.4: Puan gruplarını pairing no'ya göre sırala
+                    if st.button("🎲 Eşlendirmeyi Yap"):
                         players = pd.read_sql(f"SELECT isim FROM sonuclar WHERE turnuva_id={t_id} ORDER BY puan DESC, pairing_no ASC", conn)['isim'].tolist()
-                        
                         if len(players) >= 2:
-                            # Madde 8: Bye Atama (Sayı tekse, en düşük pairing no'ya)
                             if len(players) % 2 != 0:
                                 bye = players.pop()
                                 conn.execute("INSERT INTO eslesmeler (turnuva_id, tur_no, beyaz, siyah, sonuc) VALUES (?, ?, ?, 'BYE', '1-0')", (t_id, t_mevcut, bye))
                                 conn.execute(f"UPDATE sonuclar SET puan=puan+1, bye_aldimi=1 WHERE isim='{bye}' AND turnuva_id={t_id}")
-                            
-                            # Madde 9.4: Üst yarı - Alt yarı eşleşmesi
                             yari = len(players) // 2
                             ust, alt = players[:yari], players[yari:]
                             for i in range(yari):
                                 conn.execute("INSERT INTO eslesmeler (turnuva_id, tur_no, beyaz, siyah, sonuc) VALUES (?, ?, ?, ?, 'Bekliyor')", (t_id, t_mevcut, ust[i], alt[i]))
                             conn.commit(); st.rerun()
                 else:
-                    with st.form("sonuclar"):
-                        form_data = []
+                    with st.form("sonuc_g"):
+                        maç_list = []
                         for i, (b, s, res) in enumerate(mevcut_m, 1):
                             if s == "BYE": st.info(f"✅ Masa {i}: {b} (BYE)")
                             else:
                                 st.write(f"Masa {i}: {b} - {s}")
-                                r = st.selectbox("Sonuç", ["Bekliyor", "1-0", "0-1", "0.5-0.5"], key=f"m_{t_mevcut}_{i}")
-                                form_data.append((b, s, r))
-                        
+                                r_val = st.selectbox("Sonuç", ["Bekliyor", "1-0", "0-1", "0.5-0.5"], key=f"r_{t_mevcut}_{i}")
+                                maç_list.append((b, s, r_val))
                         if st.form_submit_button("Turu Onayla"):
-                            for b, s, r in form_data:
+                            for b, s, r in maç_list:
                                 if r != "Bekliyor":
                                     p1 = 1.0 if r == "1-0" else (0.5 if r == "0.5-0.5" else 0.0)
                                     conn.execute("UPDATE sonuclar SET puan=puan+? WHERE isim=? AND turnuva_id=?", (p1, b, t_id))
                                     conn.execute("UPDATE sonuclar SET puan=puan+? WHERE isim=? AND turnuva_id=?", (1.0-p1, s, t_id))
-                                    # HATA GİDERİLEN SATIR (Süslü parantez kapatıldı)
                                     conn.execute(f"UPDATE eslesmeler SET sonuc='{r}' WHERE beyaz='{b}' AND turnuva_id={t_id} AND tur_no={t_mevcut}")
-                            
                             if t_mevcut < t_toplam:
                                 conn.execute(f"UPDATE turnuva_ayar SET mevcut_tur={t_mevcut+1} WHERE id={t_id}")
                             else:
@@ -124,11 +123,29 @@ if menu == "🏆 Mevcut Turnuva":
                             conn.commit(); st.rerun()
 
             with tab3:
-                st.write("### Güncel Sıralama (Madde 16)")
-                df_s = pd.read_sql(f"SELECT pairing_no as 'No', isim as 'Oyuncu', elo as 'ELO', puan as 'Puan' FROM sonuclar WHERE turnuva_id={t_id} ORDER BY Puan DESC, ELO DESC", conn)
-                st.table(df_s)
+                df_rank = pd.read_sql(f"SELECT pairing_no as 'No', isim as 'Oyuncu', elo as 'ELO', puan as 'Puan' FROM sonuclar WHERE turnuva_id={t_id} ORDER BY Puan DESC, ELO DESC", conn)
+                st.table(df_rank)
 
-elif menu == "📜 Arşiv":
-    st.header("📚 Arşiv")
-    df_a = pd.read_sql("SELECT ad FROM turnuva_ayar WHERE durum IN ('Arşiv', 'Bitti')", conn)
-    st.table(df_a)
+# --- ARŞİV VE GEÇMİŞ (Geri Geldi ve Geliştirildi) ---
+elif menu == "📜 Arşiv ve Geçmiş":
+    st.header("📚 Geçmiş Turnuvalar")
+    arsiv_df = pd.read_sql("SELECT id, ad FROM turnuva_ayar WHERE durum='Arşiv' OR durum='Bitti' ORDER BY id DESC", conn)
+    
+    if not arsiv_df.empty:
+        secilen_ad = st.selectbox("İncelemek İstediğiniz Turnuvayı Seçin", arsiv_df['ad'].tolist())
+        s_id = arsiv_df[arsiv_df['ad'] == secilen_ad]['id'].values[0]
+        
+        ars_tab1, ars_tab2 = st.tabs(["📊 Final Sıralaması", "📜 Tur Sonuçları"])
+        
+        with ars_tab1:
+            res_df = pd.read_sql(f"SELECT pairing_no as 'No', isim as 'Oyuncu', elo as 'ELO', puan as 'Puan' FROM sonuclar WHERE turnuva_id={s_id} ORDER BY Puan DESC, ELO DESC", conn)
+            st.table(res_df)
+            
+        with ars_tab2:
+            tur_list = pd.read_sql(f"SELECT DISTINCT tur_no FROM eslesmeler WHERE turnuva_id={s_id} ORDER BY tur_no ASC", conn)
+            for t_no in tur_list['tur_no']:
+                st.write(f"#### Tur {t_no}")
+                m_df = pd.read_sql(f"SELECT beyaz, siyah, sonuc FROM eslesmeler WHERE turnuva_id={s_id} AND tur_no={t_no}", conn)
+                st.table(m_df)
+    else:
+        st.info("Henüz arşivlenmiş bir turnuva bulunmuyor.")
